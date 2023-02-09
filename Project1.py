@@ -1,16 +1,17 @@
 import cv2
 import numpy as np
+from time import perf_counter
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Function Definitions ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 #Cubic function
-def Find_Value(a, b, c, d,x):
-    return a * x**3 + b * x**2 + c * x + d
+def Find_Value(abcd,x):
+    return np.clip(abcd[0] * x**3 + abcd[1] * x**2 + abcd[2] * x + abcd[3], 0, 255) #Prevents lower than 0 and higher than 255
 
 #Makes spline coefficient matrix for a given size
 def Make_Spline(num_points):
-    points =  np.arrange(num_points)#The number of points to be included in the spline
+    points =  np.arange(num_points)#The number of points to be included in the spline
 
     '''
     ~~~~~~~~~~ Create system of equations ~~~~~~~~~~
@@ -66,7 +67,9 @@ def Make_Spline(num_points):
     x = points[num_points-1]
     matrix[4*(num_points-1)-1,4*(num_points-2):] = [6*x,2,0,0]
 
-    return matrix
+    #Lastly, invert the matrix so we can use it to solve later on
+
+    return np.linalg.inv(matrix)
 
 #Returns the coefficients for a cubic spline solution
 def Find_Spline(z_values,spline_mat):
@@ -85,10 +88,64 @@ def Find_Spline(z_values,spline_mat):
         z[2*(num_points-1)-1] = z_values[num_points-1] #Assign last Y value
     
     #This solves the matrix using inverse method
-    return np.linalg.inv(spline_mat).dot(z)
+    return np.dot(spline_mat,z)
+
+#Reconstruct an image using cubic spline
+def Reconstruct(img_comp,x_pixels,y_pixels):
+    x_pixels_comp, y_pixels_comp = img_comp.shape #size of the compressed Y channel
+
+    comp_factor = x_pixels // x_pixels_comp #factor by which the image was compressed
+
+    img_up = np.zeros((x_pixels,y_pixels),dtype=np.uint8) #Empty array for the reconstruction
+
+    #Loop through and add all the sampled pixels from the compressed image
+    for x in range(0,x_pixels_comp):
+        for y in range(0,y_pixels_comp):
+            img_up[x*comp_factor,y*comp_factor] = img_comp[x,y]
+
+    #Perform a spline calculation across each row and column, averaging the centre pixels
+    spline_matrix = Make_Spline(4) #precalculate for the spline method, will be using 4 pixels x 4 pixels
+
+    for x in range(0,x_pixels-comp_factor**2,4*(comp_factor-1)):
+        for y in range(0,y_pixels-comp_factor**2,4*(comp_factor-1)):
+
+            for i in range(0,4*comp_factor,comp_factor):
+                #Find the spline for the columns
+                spline = Find_Spline([img_up[x,y+i],img_up[x+comp_factor,y+i],img_up[x+2*comp_factor,y+i],img_up[x+3*comp_factor,y+i],],spline_matrix)
+                
+                for j in range(1,3*comp_factor,1):
+                    #Skip the known values
+                    if not j%comp_factor:
+                        continue
+                    img_up[x+j,y+i] = Find_Value(spline[4*(j//comp_factor):4*(j//comp_factor+1)],j//comp_factor+0.5)
+
+                #For the rows
+                spline = Find_Spline([img_up[x+i,y],img_up[x+i,y+comp_factor],img_up[x+i,y+2*comp_factor],img_up[x+i,y+3*comp_factor],],spline_matrix)
+                
+                for j in range(1,3*comp_factor,1):
+                    #Skip the known values
+                    if not j%comp_factor:
+                        continue
+                    img_up[x+i,y+j] = Find_Value(spline[4*(j//comp_factor):4*(j//comp_factor+1)],j//comp_factor+0.5)
+
+            #Average the centre pixels
+            for c in range(0,3*comp_factor,comp_factor):
+                for d in range(0,3*comp_factor,comp_factor):
+                    for a in range(1,comp_factor):
+                        for b in range(1,comp_factor):
+                            img_up[x+a+c,y+b+d] = np.uint8(0.25*(
+                                int(img_up[x+c,y+b+d]) + int(img_up[x+c+comp_factor,y+b+d]) + int(img_up[x+a+c,y+d]) + int(img_up[x+a+c,y+comp_factor+d])
+                            ))
+            # img_up[x+comp_factor-1,y+comp_factor-1] = np.uint8( np.average((img_up[x:x+3,y:y+3]),weights=[[.125,.125,.125],[.125,0,.125],[.125,.125,.125]]) )
+            # img_up[x+2*comp_factor-1,y+comp_factor-1] = np.uint8( np.average((img_up[x+2:x+5,y:y+3]),weights=[[.125,.125,.125],[.125,0,.125],[.125,.125,.125]]) )
+            # img_up[x+comp_factor-1,y+2*comp_factor-1] = np.uint8( np.average((img_up[x:x+3,y+2:y+5]),weights=[[.125,.125,.125],[.125,0,.125],[.125,.125,.125]]) )
+            # img_up[x+2*comp_factor-1,y+2*comp_factor-1] = np.uint8( np.average((img_up[x+2:x+5,y+2:y+5]),weights=[[.125,.125,.125],[.125,0,.125],[.125,.125,.125]]) )
+    
+    return img_up
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Function Definitions ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+start_time = perf_counter()
 
 orig_img = cv2.imread("sample_image.png") #Read in image into a numpy array
 orig_img_yuv = cv2.cvtColor(orig_img,cv2.COLOR_BGR2YUV) #Originally BGR, convert to YUV
@@ -104,14 +161,15 @@ red_img = orig_img_yuv[:,:,2] #red channel (V), red projection
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Display orginal image and channels ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-cv2.imshow('Full Colour Image',orig_img) #Display full colour image (needs a conversion)
+cv2.imshow('Full Colour Image',orig_img) #Display full colour image
 
 #Show all three channels separated
-separated_channels = np.concatenate((luma_img,blue_img,red_img),axis=1)
-#cv2.imshow('Y-channel, U-channel, V-channel',separated_channels)
+# separated_channels = np.concatenate((luma_img,blue_img,red_img),axis=1)
+# cv2.imshow('Y-channel, U-channel, V-channel',separated_channels)
 
 original_size = x_pixels * y_pixels * channels * 8
 print("Original image size: " + str(original_size) + " bits")
+print("X: " + str(x_pixels) + ", Y: " + str(y_pixels))
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Compress Y channel by factor of 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -124,7 +182,7 @@ for x in range(0,x_pixels-1,luma_shrink):
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Compress U channel by factor of X ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-blue_shrink = 2
+blue_shrink = 4
 blue_img_comp = np.zeros((x_pixels//blue_shrink,y_pixels//blue_shrink),dtype=np.uint8) #Creates empty array half the size of the original image
 
 for x in range(0,x_pixels-1,blue_shrink):
@@ -133,7 +191,7 @@ for x in range(0,x_pixels-1,blue_shrink):
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Compress V channel by factor of X ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-red_shrink = 2
+red_shrink = 4
 red_img_comp = np.zeros((x_pixels//red_shrink,y_pixels//red_shrink),dtype=np.uint8) #Creates empty array half the size of the original image
 
 for x in range(0,x_pixels-1,red_shrink):
@@ -143,50 +201,34 @@ for x in range(0,x_pixels-1,red_shrink):
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Display the compressed channels ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+print("\nCompressed image size: " + str(0))
 #cv2.imshow("Luma (Y) Channel Shrunk by Factor of "+str(luma_shrink),luma_img_comp)
 #cv2.imshow("Blue (U) Channel Shrunk by Factor of "+str(blue_shrink),blue_img_comp)
-#cv2.imshow("Red (U) Channel Shrunk by Factor of "+str(red_shrink),red_img_comp)
+#cv2.imshow("Red (V) Channel Shrunk by Factor of "+str(red_shrink),red_img_comp)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Reconstruct the Y channel ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-x_pixels_comp, y_pixels_comp = luma_img_comp.shape #size of the compressed Y channel
-
-comp_factor = x_pixels // x_pixels_comp #factor by which the image was compressed
-
-luma_img_up = np.zeros((x_pixels,y_pixels),dtype=np.uint8) #Empty array for the reconstruction
-
-#Loop through and add all the sampled pixels from the compressed image
-for x in range(0,x_pixels_comp):
-    for y in range(0,y_pixels_comp):
-        luma_img_up[x*comp_factor,y*comp_factor] = luma_img_comp[x,y]
-
-#Perform a spline calculation across each row and column, averaging the centre pixels
-spline_matrix = Make_Spline(4) #precalculate for the spline method, will be using 4 pixels x 4 pixels
-
-for x in range(0,x_pixels/100,4*comp_factor):
-    for y in range(0,y_pixels/100,4*comp_factor):
-        spline = [] #Empty list
-        spline.append(Find_Spline([luma_img_up[x,y],luma_img_up[x+1,y],luma_img_up[x+2,y],luma_img_up[x+3,y]],spline_matrix))
-
-
-
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Upsample the channels ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+luma_img_up = Reconstruct(luma_img_comp,x_pixels,y_pixels) #Y channel
+blue_img_up = Reconstruct(blue_img_comp,x_pixels,y_pixels) #U channel
+red_img_up = Reconstruct(red_img_comp,x_pixels,y_pixels) #V channel
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Reconstruct the full image ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cv2.imwrite("red_reconstruct.png",red_img)
+cv2.imwrite("luma_reconstruct_new.png",luma_img_up)
 
-#cv2.imshow("Luma Reconstruct",luma_img_up)
-#cv2.imshow("Blue Reconstruct",blue_img_up)
-#cv2.imshow("Red Reconstruct",red_img_up)
+#Combine the three channels
+reconstructed_img = np.zeros((x_pixels,y_pixels,3),dtype=np.uint8)
 
-#reconstructed_img = np.zeros((x_pixels,y_pixels,3),dtype=np.uint8)
+reconstructed_img[:,:,0] = luma_img_up
+reconstructed_img[:,:,1] = blue_img_up
+reconstructed_img[:,:,2] = red_img_up
 
-#reconstructed_img[:,:,0] = luma_img_up
-#reconstructed_img[:,:,1] = blue_img_up
-#reconstructed_img[:,:,2] = red_img_up
+reconstructed_img = cv2.cvtColor(reconstructed_img,cv2.COLOR_YUV2BGR)
 
-#reconstructed_img = cv2.cvtColor(reconstructed_img,cv2.COLOR_YUV2BGR)
+cv2.imshow("Reconstructed Image",reconstructed_img)
 
-#cv2.imshow("Reconstructed Image",reconstructed_img)
+print("Runtime: " + str(perf_counter()-start_time)) #Calcualtes runtime of the code
 
 cv2.waitKey() #Displays images until user hits the 'q' key
 cv2.destroyAllWindows() #Makes sure everything is closed
