@@ -96,18 +96,22 @@ def Reconstruct(img_comp,x_pixels,y_pixels):
 
     comp_factor = x_pixels // x_pixels_comp #factor by which the image was compressed
 
-    img_up = np.zeros((x_pixels,y_pixels),dtype=np.uint8) #Empty array for the reconstruction
+    img_up = np.zeros((x_pixels+3*comp_factor,y_pixels+3*comp_factor),dtype=np.uint8) #Empty array for the reconstruction
 
     #Loop through and add all the sampled pixels from the compressed image
     for x in range(0,x_pixels_comp):
         for y in range(0,y_pixels_comp):
             img_up[x*comp_factor,y*comp_factor] = img_comp[x,y]
 
+    #Handle the edges by duplicating last row/column
+    img_up[x_pixels:,:] = img_up[x_pixels-3*comp_factor:x_pixels,:]
+    img_up[:,y_pixels:] = img_up[:,y_pixels-3*comp_factor:y_pixels]
+
     #Perform a spline calculation across each row and column, averaging the centre pixels
     spline_matrix = Make_Spline(4) #precalculate for the spline method, will be using 4 pixels x 4 pixels
 
-    for x in range(0,x_pixels-comp_factor**2,4*(comp_factor-1)):
-        for y in range(0,y_pixels-comp_factor**2,4*(comp_factor-1)):
+    for x in range(0,x_pixels,4*(comp_factor-1)):
+        for y in range(0,y_pixels,4*(comp_factor-1)):
 
             for i in range(0,4*comp_factor,comp_factor):
                 #Find the spline for the columns
@@ -136,12 +140,15 @@ def Reconstruct(img_comp,x_pixels,y_pixels):
                             img_up[x+a+c,y+b+d] = np.uint8(0.25*(
                                 int(img_up[x+c,y+b+d]) + int(img_up[x+c+comp_factor,y+b+d]) + int(img_up[x+a+c,y+d]) + int(img_up[x+a+c,y+comp_factor+d])
                             ))
-            # img_up[x+comp_factor-1,y+comp_factor-1] = np.uint8( np.average((img_up[x:x+3,y:y+3]),weights=[[.125,.125,.125],[.125,0,.125],[.125,.125,.125]]) )
-            # img_up[x+2*comp_factor-1,y+comp_factor-1] = np.uint8( np.average((img_up[x+2:x+5,y:y+3]),weights=[[.125,.125,.125],[.125,0,.125],[.125,.125,.125]]) )
-            # img_up[x+comp_factor-1,y+2*comp_factor-1] = np.uint8( np.average((img_up[x:x+3,y+2:y+5]),weights=[[.125,.125,.125],[.125,0,.125],[.125,.125,.125]]) )
-            # img_up[x+2*comp_factor-1,y+2*comp_factor-1] = np.uint8( np.average((img_up[x+2:x+5,y+2:y+5]),weights=[[.125,.125,.125],[.125,0,.125],[.125,.125,.125]]) )
-    
+
     return img_up
+
+#Calculate PSNR of the reconstructed image
+def Get_PSNR(orig_img,img_up):
+    #First find mean square error
+    mse = np.mean((orig_img/255.0-img_up/255.0)**2)
+    #Calculate the PSNR
+    return 10*np.log10(1.0/ mse)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Function Definitions ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -169,7 +176,6 @@ cv2.imshow('Full Colour Image',orig_img) #Display full colour image
 
 original_size = x_pixels * y_pixels * channels * 8
 print("Original image size: " + str(original_size) + " bits")
-print("X: " + str(x_pixels) + ", Y: " + str(y_pixels))
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Compress Y channel by factor of 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -200,11 +206,10 @@ for x in range(0,x_pixels-1,red_shrink):
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Display the compressed channels ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compressed_size = luma_img_comp.shape[0]*luma_img_comp.shape[1]* 8 + blue_img_comp.shape[0]*blue_img_comp.shape[1]* 8 + red_img_comp.shape[0]*red_img_comp.shape[1]* 8
+print("Compressed image size: " + str(compressed_size) + " bits")
 
-print("\nCompressed image size: " + str(0))
-#cv2.imshow("Luma (Y) Channel Shrunk by Factor of "+str(luma_shrink),luma_img_comp)
-#cv2.imshow("Blue (U) Channel Shrunk by Factor of "+str(blue_shrink),blue_img_comp)
-#cv2.imshow("Red (V) Channel Shrunk by Factor of "+str(red_shrink),red_img_comp)
+print("\tImage compression: " + str(100*(original_size-compressed_size)/original_size) + "%")
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Upsample the channels ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -214,21 +219,24 @@ red_img_up = Reconstruct(red_img_comp,x_pixels,y_pixels) #V channel
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Reconstruct the full image ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cv2.imwrite("red_reconstruct.png",red_img)
-cv2.imwrite("luma_reconstruct_new.png",luma_img_up)
+# cv2.imwrite("red_reconstruct.png",red_img_up)
+# cv2.imwrite("luma_reconstruct_new.png",luma_img_up)
 
 #Combine the three channels
 reconstructed_img = np.zeros((x_pixels,y_pixels,3),dtype=np.uint8)
 
-reconstructed_img[:,:,0] = luma_img_up
-reconstructed_img[:,:,1] = blue_img_up
-reconstructed_img[:,:,2] = red_img_up
+reconstructed_img[:,:,0] = luma_img_up[:x_pixels,:y_pixels] #Crop the image to the original size
+reconstructed_img[:,:,1] = blue_img_up[:x_pixels,:y_pixels]
+reconstructed_img[:,:,2] = red_img_up[:x_pixels,:y_pixels]
 
-reconstructed_img = cv2.cvtColor(reconstructed_img,cv2.COLOR_YUV2BGR)
+reconstructed_img = cv2.cvtColor(reconstructed_img,cv2.COLOR_YUV2BGR) #convert back to BGR from YUV
 
 cv2.imshow("Reconstructed Image",reconstructed_img)
+cv2.imwrite("xyz_reconstruct.png",reconstructed_img)
 
-print("Runtime: " + str(perf_counter()-start_time)) #Calcualtes runtime of the code
+print("PSNR: " + str(Get_PSNR(orig_img,reconstructed_img)))
+
+print("\nRuntime: " + str(perf_counter()-start_time)) #Calcualtes runtime of the code
 
 cv2.waitKey() #Displays images until user hits the 'q' key
 cv2.destroyAllWindows() #Makes sure everything is closed
