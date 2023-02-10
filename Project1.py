@@ -1,9 +1,71 @@
+"""
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 4TN4 - Project 1 by Brandon Noble --- Feb. 2023 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This is a simple project that takes an input image, compresses it, and then reconstructs the image.
+My process for doing so is as follows:
+    - Separate the BGR image into YUV colourspace
+    - Apply a Gaussian blur (sigma = 0.5) to the Y channel
+    - Down sample each channel (Y by 2, U and V by 4) by averaging surrounding pixels
+    - Upsample the image with a cubic spline method
+    - Apply a Laplacian sharpening filter to the Y channel to enhance edges
+    - Convert from YUV to RGB
+
+Using some sample images, the PSNR is ~27.32 on average.
+"""
+
 import cv2
 import numpy as np
 from time import perf_counter
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Function Definitions ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#Convolution without using premade functions (for 3x3 kernels)
+def Convolute_Channel(img_channel,kernel):
+    x_pixels,y_pixels = img_channel.shape
+    convoluted_channel = img_channel #Save results in a new matrix
+
+    for x in range(1,x_pixels-2):
+        for y in range(1,y_pixels-2):
+            result = 0.0
+            for i in range(0,3):
+                for j in range(0,3):
+                    result += kernel[i,j] * float(img_channel[x+i-1,y+j-1])
+            convoluted_channel[x,y] = np.clip(result,0,255) #Make sure values stay within 0-255
+
+    return convoluted_channel
+
+def Convolute_Full_Image(img,kernel):
+    
+    #Separate into 3 channels first
+    img_channel_0 = img[:,:,0]
+    img_channel_1 = img[:,:,1]
+    img_channel_2 = img[:,:,2]
+
+    #Convolute filter with each channel before combining
+    img_channel_0 = Convolute_Channel(img_channel_0,kernel)
+    img_channel_1 = Convolute_Channel(img_channel_1,kernel)
+    img_channel_2 = Convolute_Channel(img_channel_2,kernel)
+
+    #Combine the channels
+    x_pixels,y_pixels = img_channel_0.shape
+    convoluted_image = np.zeros((x_pixels,y_pixels,3),dtype=np.uint8)
+    convoluted_image[:,:,0] = img_channel_0
+    convoluted_image[:,:,1] = img_channel_1
+    convoluted_image[:,:,2] = img_channel_2
+
+    return convoluted_image
+
+#Downsample images
+def Down_Sample(img,factor):
+    x_pixels,y_pixels = img.shape
+    img_comp = np.zeros((x_pixels//factor,y_pixels//factor),dtype=np.uint8) #Creates empty array half the size of the original image
+
+    #Average the surrounding pixels before sampling
+    for x in range(0,x_pixels-1,factor):
+        for y in range(0,y_pixels-1,factor):
+            img_comp[x//factor,y//factor] = np.mean(img[x:x+factor,y:y+factor])
+
+    return img_comp
 
 #Cubic function
 def Find_Value(abcd,x):
@@ -151,10 +213,11 @@ def Get_PSNR(orig_img,img_up):
     return 10*np.log10(1.0/ mse)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Function Definitions ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Read in and setup images ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 start_time = perf_counter()
 
-orig_img = cv2.imread("sample_image.png") #Read in image into a numpy array
+orig_img = cv2.imread("valley.png") #Read in image into a numpy array
 orig_img_yuv = cv2.cvtColor(orig_img,cv2.COLOR_BGR2YUV) #Originally BGR, convert to YUV
 
 #Returns the length of each dimension (X pixels, Y pixels, channels)
@@ -170,42 +233,39 @@ red_img = orig_img_yuv[:,:,2] #red channel (V), red projection
 
 cv2.imshow('Full Colour Image',orig_img) #Display full colour image
 
-#Show all three channels separated
+#Show and save all three channels separated
 # separated_channels = np.concatenate((luma_img,blue_img,red_img),axis=1)
 # cv2.imshow('Y-channel, U-channel, V-channel',separated_channels)
+cv2.imwrite("y_channel_orig.png",luma_img)
+cv2.imwrite("u_channel_orig.png",blue_img)
+cv2.imwrite("v_channel_orig.png",red_img)
 
 original_size = x_pixels * y_pixels * channels * 8
 print("Original image size: " + str(original_size) + " bits")
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Compress Y channel by factor of 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-luma_shrink = 2 #Factor by which to compress the image
-luma_img_comp = np.zeros((x_pixels//luma_shrink,y_pixels//luma_shrink),dtype=np.uint8) #Creates empty array half the size of the original image
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Compress YUV channels  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-for x in range(0,x_pixels-1,luma_shrink):
-    for y in range(0,y_pixels-1,luma_shrink):
-        luma_img_comp[x//luma_shrink,y//luma_shrink] = luma_img[x,y]
+#Apply Gaussian kernel before sampling the Y channel (sigma = 0.5)
+gaussian_kernel = np.array([
+    [0.0114,0.0842,0.0114],
+    [0.0842,0.6194,0.0842],
+    [0.0114,0.0842,0.0114]
+])
 
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Compress U channel by factor of X ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-blue_shrink = 4
-blue_img_comp = np.zeros((x_pixels//blue_shrink,y_pixels//blue_shrink),dtype=np.uint8) #Creates empty array half the size of the original image
+luma_img = Convolute_Channel(luma_img,gaussian_kernel)
 
-for x in range(0,x_pixels-1,blue_shrink):
-    for y in range(0,y_pixels-1,blue_shrink):
-        blue_img_comp[x//blue_shrink,y//blue_shrink] = blue_img[x,y]
+#Down sample all the channels
+luma_img_comp = Down_Sample(luma_img,2) #compress Y by 2
+blue_img_comp = Down_Sample(blue_img,4) #compress U by 4
+red_img_comp = Down_Sample(red_img,4) #compress V by 4
 
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Compress V channel by factor of X ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-red_shrink = 4
-red_img_comp = np.zeros((x_pixels//red_shrink,y_pixels//red_shrink),dtype=np.uint8) #Creates empty array half the size of the original image
+#Save down sampled channels
+cv2.imwrite("y_channel_comp.png",luma_img_comp)
+cv2.imwrite("u_channel_comp.png",blue_img_comp)
+cv2.imwrite("v_channel_comp.png",red_img_comp)
 
-for x in range(0,x_pixels-1,red_shrink):
-    for y in range(0,y_pixels-1,red_shrink):
-        red_img_comp[x//red_shrink,y//red_shrink] = red_img[x,y]
-
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Display the compressed channels ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Calculate how much the image was compressed
 compressed_size = luma_img_comp.shape[0]*luma_img_comp.shape[1]* 8 + blue_img_comp.shape[0]*blue_img_comp.shape[1]* 8 + red_img_comp.shape[0]*red_img_comp.shape[1]* 8
 print("Compressed image size: " + str(compressed_size) + " bits")
 
@@ -213,30 +273,58 @@ print("\tImage compression: " + str(100*(original_size-compressed_size)/original
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Upsample the channels ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 luma_img_up = Reconstruct(luma_img_comp,x_pixels,y_pixels) #Y channel
 blue_img_up = Reconstruct(blue_img_comp,x_pixels,y_pixels) #U channel
 red_img_up = Reconstruct(red_img_comp,x_pixels,y_pixels) #V channel
 
+#Save upsampled images
+cv2.imwrite("y_channel_up.png",luma_img_up)
+cv2.imwrite("u_channel_up.png",blue_img_up)
+cv2.imwrite("v_channel_up.png",red_img_up)
+
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Reconstruct the full image ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# cv2.imwrite("red_reconstruct.png",red_img_up)
-# cv2.imwrite("luma_reconstruct_new.png",luma_img_up)
 
-#Combine the three channels
+#Sharpen the image slightly using a Laplacian sharpening filter on the Y channel
+#Weights were determined through trial and error
+laplacian_kernel = np.array([
+    [-0.125,-0.25,-0.125],
+    [-0.25,2.5,-0.25],
+    [-0.125,-0.25,-0.125],
+])
+
+luma_img_up = Convolute_Channel(luma_img_up,laplacian_kernel)
+
+#Create the matrix for the final image
 reconstructed_img = np.zeros((x_pixels,y_pixels,3),dtype=np.uint8)
 
+#Add all three channels
 reconstructed_img[:,:,0] = luma_img_up[:x_pixels,:y_pixels] #Crop the image to the original size
 reconstructed_img[:,:,1] = blue_img_up[:x_pixels,:y_pixels]
 reconstructed_img[:,:,2] = red_img_up[:x_pixels,:y_pixels]
 
 reconstructed_img = cv2.cvtColor(reconstructed_img,cv2.COLOR_YUV2BGR) #convert back to BGR from YUV
 
+#Display and save image
 cv2.imshow("Reconstructed Image",reconstructed_img)
-cv2.imwrite("xyz_reconstruct.png",reconstructed_img)
+cv2.imwrite("upsampled_image.png",reconstructed_img)
 
-print("PSNR: " + str(Get_PSNR(orig_img,reconstructed_img)))
+#Calculate PSNR
+psnr_value = Get_PSNR(orig_img,reconstructed_img)
+print("PSNR: " + str(psnr_value))
 
-print("\nRuntime: " + str(perf_counter()-start_time)) #Calcualtes runtime of the code
+#Calcualtes runtime of the code
+runtime_duration = perf_counter()-start_time
+print("\nRuntime: " + str(runtime_duration))
+
+#Record the results in a TXT file
+with open('results.txt','w') as f:
+    f.write("Original image size " + str(original_size) + " bits")
+    f.write("\nCompressed image size: " + str(compressed_size) + " bits")
+    f.write("\nImage compressed by " + str(100*(original_size-compressed_size)/original_size) + "%")
+    f.write("\nPSNR: " + str(psnr_value))
+    f.write("\n\nRuntime: " + str(runtime_duration))
 
 cv2.waitKey() #Displays images until user hits the 'q' key
 cv2.destroyAllWindows() #Makes sure everything is closed
