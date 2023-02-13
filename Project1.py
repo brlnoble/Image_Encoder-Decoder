@@ -58,11 +58,34 @@ def Convolute_Full_Image(img,kernel):
 #Downsample images
 def Down_Sample(img,factor):
     x_pixels,y_pixels = img.shape
+
+    #Check if the image dimensions are odd numbers
+    odd_x = True if x_pixels%2 else False
+    odd_y = True if y_pixels%2 else False
+
+    #Resize the image if odd
+    if odd_x or odd_y:
+        new_x = x_pixels+1 if odd_x else x_pixels #If odd X, add 1 to make it even
+        new_y = y_pixels+1 if odd_y else y_pixels #If odd Y, add 1 to make it even
+        #Resize the image
+        img_resize = np.zeros((new_x,new_y),dtype=np.uint8)
+        img_resize[:x_pixels-1,:y_pixels-1] = img[:x_pixels-1,:y_pixels-1] #Copy over the original
+        
+        #Duplicate pixels for the extra row and/or column
+        if odd_x:
+            img_resize[new_x-1:,:y_pixels-1] = img[x_pixels-1:,:y_pixels-1]
+        if odd_y:
+            img_resize[:x_pixels-1,new_y-1:] = img[:x_pixels-1,y_pixels-1:]
+
+        #Overwrite input with the resized image
+        img = img_resize
+
+
     img_comp = np.zeros((x_pixels//factor,y_pixels//factor),dtype=np.uint8) #Creates empty array half the size of the original image
 
     #Average the surrounding pixels before sampling
-    for x in range(0,x_pixels-1,factor):
-        for y in range(0,y_pixels-1,factor):
+    for x in range(0,x_pixels-(factor-1),factor):
+        for y in range(0,y_pixels-(factor-1),factor):
             img_comp[x//factor,y//factor] = np.mean(img[x:x+factor,y:y+factor])
 
     return img_comp
@@ -155,6 +178,10 @@ def Find_Spline(z_values,spline_mat):
 #Reconstruct an image using cubic spline
 def Reconstruct(img_comp,x_pixels,y_pixels):
     x_pixels_comp, y_pixels_comp = img_comp.shape #size of the compressed Y channel
+    
+    #If image is odd
+    x_pixels = x_pixels+1 if x_pixels%2 else x_pixels
+    y_pixels = y_pixels+1 if y_pixels%2 else y_pixels
 
     comp_factor = x_pixels // x_pixels_comp #factor by which the image was compressed
 
@@ -166,8 +193,8 @@ def Reconstruct(img_comp,x_pixels,y_pixels):
             img_up[x*comp_factor,y*comp_factor] = img_comp[x,y]
 
     #Handle the edges by duplicating last row/column
-    img_up[x_pixels:,:] = img_up[x_pixels-3*comp_factor:x_pixels,:]
-    img_up[:,y_pixels:] = img_up[:,y_pixels-3*comp_factor:y_pixels]
+    img_up[x_pixels-comp_factor:,:] = img_up[x_pixels-4*comp_factor:x_pixels,:]
+    img_up[:,y_pixels-comp_factor:] = img_up[:,y_pixels-4*comp_factor:y_pixels]
 
     #Perform a spline calculation across each row and column, averaging the centre pixels
     spline_matrix = Make_Spline(4) #precalculate for the spline method, will be using 4 pixels x 4 pixels
@@ -217,7 +244,7 @@ def Get_PSNR(orig_img,img_up):
 
 start_time = perf_counter()
 
-orig_img = cv2.imread("valley.png") #Read in image into a numpy array
+orig_img = cv2.imread("sunrise.png") #Read in image into a numpy array
 orig_img_yuv = cv2.cvtColor(orig_img,cv2.COLOR_BGR2YUV) #Originally BGR, convert to YUV
 
 #Returns the length of each dimension (X pixels, Y pixels, channels)
