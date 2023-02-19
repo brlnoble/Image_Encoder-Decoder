@@ -9,7 +9,7 @@ My process for doing so is as follows:
     - Apply a Laplacian sharpening filter to the Y channel to enhance edges
     - Convert from YUV to RGB
 
-Using some sample images, the PSNR is ~27.32 on average.
+Using some sample images, the PSNR is ~26.357 on average, accomplishing 87.5% compression.
 """
 
 import cv2
@@ -153,7 +153,6 @@ def Make_Spline(num_points):
     matrix[4*(num_points-1)-1,4*(num_points-2):] = [6*x,2,0,0]
 
     #Lastly, invert the matrix so we can use it to solve later on
-
     return np.linalg.inv(matrix)
 
 #Returns the coefficients for a cubic spline solution
@@ -176,7 +175,7 @@ def Find_Spline(z_values,spline_mat):
     return np.dot(spline_mat,z)
 
 #Reconstruct an image using cubic spline
-def Reconstruct(img_comp,x_pixels,y_pixels):
+def Reconstruct(img_comp,x_pixels,y_pixels,spline_matrix):
     x_pixels_comp, y_pixels_comp = img_comp.shape #size of the compressed Y channel
     
     #If image is odd
@@ -197,8 +196,6 @@ def Reconstruct(img_comp,x_pixels,y_pixels):
     img_up[:,y_pixels-comp_factor:] = img_up[:,y_pixels-4*comp_factor:y_pixels]
 
     #Perform a spline calculation across each row and column, averaging the centre pixels
-    spline_matrix = Make_Spline(4) #precalculate for the spline method, will be using 4 pixels x 4 pixels
-
     for x in range(0,x_pixels,4*(comp_factor-1)):
         for y in range(0,y_pixels,4*(comp_factor-1)):
 
@@ -242,9 +239,9 @@ def Get_PSNR(orig_img,img_up):
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Read in and setup images ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-start_time = perf_counter()
+start_time = perf_counter() #Used to find runtime of the program
 
-orig_img = cv2.imread("sunrise.png") #Read in image into a numpy array
+orig_img = cv2.imread("valley.png") #Read in image into a numpy array
 orig_img_yuv = cv2.cvtColor(orig_img,cv2.COLOR_BGR2YUV) #Originally BGR, convert to YUV
 
 #Returns the length of each dimension (X pixels, Y pixels, channels)
@@ -300,10 +297,11 @@ print("\tImage compression: " + str(100*(original_size-compressed_size)/original
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Upsample the channels ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+spline_matrix = Make_Spline(4) #precalculate for the spline method, will be using 4 pixels x 4 pixels
 
-luma_img_up = Reconstruct(luma_img_comp,x_pixels,y_pixels) #Y channel
-blue_img_up = Reconstruct(blue_img_comp,x_pixels,y_pixels) #U channel
-red_img_up = Reconstruct(red_img_comp,x_pixels,y_pixels) #V channel
+luma_img_up = Reconstruct(luma_img_comp,x_pixels,y_pixels,spline_matrix) #Y channel
+blue_img_up = Reconstruct(blue_img_comp,x_pixels,y_pixels,spline_matrix) #U channel
+red_img_up = Reconstruct(red_img_comp,x_pixels,y_pixels,spline_matrix) #V channel
 
 #Save upsampled images
 cv2.imwrite("y_channel_up.png",luma_img_up)
@@ -326,7 +324,7 @@ luma_img_up = Convolute_Channel(luma_img_up,laplacian_kernel)
 #Create the matrix for the final image
 reconstructed_img = np.zeros((x_pixels,y_pixels,3),dtype=np.uint8)
 
-#Add all three channels
+#Add all three channels to one image
 reconstructed_img[:,:,0] = luma_img_up[:x_pixels,:y_pixels] #Crop the image to the original size
 reconstructed_img[:,:,1] = blue_img_up[:x_pixels,:y_pixels]
 reconstructed_img[:,:,2] = red_img_up[:x_pixels,:y_pixels]
@@ -337,8 +335,8 @@ reconstructed_img = cv2.cvtColor(reconstructed_img,cv2.COLOR_YUV2BGR) #convert b
 cv2.imshow("Reconstructed Image",reconstructed_img)
 cv2.imwrite("upsampled_image.png",reconstructed_img)
 
-#Calculate PSNR
-psnr_value = Get_PSNR(orig_img,reconstructed_img)
+#Calculate PSNR for the luma channel
+psnr_value = Get_PSNR(cv2.cvtColor(orig_img,cv2.COLOR_BGR2YUV)[:,:,0],cv2.cvtColor(reconstructed_img,cv2.COLOR_BGR2YUV)[:,:,0])
 print("PSNR: " + str(psnr_value))
 
 #Calcualtes runtime of the code
@@ -355,12 +353,3 @@ with open('results.txt','w') as f:
 
 cv2.waitKey() #Displays images until user hits the 'q' key
 cv2.destroyAllWindows() #Makes sure everything is closed
-
-
-
-# ~~~~~~~~~~ References ~~~~~~~~~~
-'''
-https://www.glynholton.com/solutions/exercise-solution-2-17/
-https://pythonnumericalmethods.berkeley.edu/notebooks/chapter17.03-Cubic-Spline-Interpolation.html
-https://timodenk.com/blog/cubic-spline-interpolation/
-'''
