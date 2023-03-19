@@ -19,6 +19,53 @@ from time import perf_counter
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Function Definitions ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+#Clip values between 0 and 255
+def clip(value):
+    return 0 if value < 0 else (255 if value > 255 else value)
+
+#BGR to YUV (coefficients from https://web.archive.org/web/20180423091842/http://www.equasys.de/colorconversion.html)
+def BGR_YUV(img):
+    x_pixels,y_pixels = img.shape[:2]
+    YUV = np.zeros((x_pixels,y_pixels,3),dtype=np.uint8)
+
+    for x in range(x_pixels):
+        for y in range(y_pixels):
+            #Calculate Y value
+            Y = int(0.257*img[x,y,2] + 0.504*img[x,y,1] + 0.098*img[x,y,0] + 16) #Offset added to prevent negative numbers
+            YUV[x,y,0] = Y
+
+            #Calculate U value
+            U = int(-0.148*img[x,y,2] - 0.291*img[x,y,1] + 0.439*img[x,y,0] + 128) #Offset added to prevent negative numbers
+            YUV[x,y,1] = U
+
+            #Calculate Y value
+            V = int(0.439*img[x,y,2] - 0.368*img[x,y,1] - 0.071*img[x,y,0] + 128) #Offset added to prevent negative numbers
+            YUV[x,y,2] = V
+    
+    return YUV
+
+#YUV to BGR
+def YUV_BGR(img):
+    x_pixels,y_pixels = img.shape[:2]
+    BGR = np.zeros((x_pixels,y_pixels,3),dtype=np.uint8)
+
+    #Convert the values
+    for x in range(x_pixels):
+        for y in range(y_pixels):
+            #Calculate B value
+            B = int(1.164*(img[x,y,0]-16) + 2.017*(img[x,y,1]-128))
+            BGR[x,y,0] = clip(B)
+
+            #Calculate G value
+            G = int(1.164*(img[x,y,0]-16) - 0.392*(img[x,y,1]-128) - 0.813*(img[x,y,2]-128))
+            BGR[x,y,1] = clip(G)
+
+            #Calculate R value
+            R = int(1.164*(img[x,y,0]-16) + 1.596*(img[x,y,2]-128))
+            BGR[x,y,2] = clip(R)
+
+    return BGR
+
 #Convolution without using premade functions (for 3x3 kernels)
 def Convolute_Channel(img_channel,kernel):
     x_pixels,y_pixels = img_channel.shape
@@ -30,7 +77,7 @@ def Convolute_Channel(img_channel,kernel):
             for i in range(0,3):
                 for j in range(0,3):
                     result += kernel[i,j] * float(img_channel[x+i-1,y+j-1])
-            convoluted_channel[x,y] = np.clip(result,0,255) #Make sure values stay within 0-255
+            convoluted_channel[x,y] = clip(result) #Make sure values stay within 0-255
 
     return convoluted_channel
 
@@ -92,7 +139,7 @@ def Down_Sample(img,factor):
 
 #Cubic function
 def Find_Value(abcd,x):
-    return np.clip(abcd[0] * x**3 + abcd[1] * x**2 + abcd[2] * x + abcd[3], 0, 255) #Prevents lower than 0 and higher than 255
+    return clip(abcd[0] * x**3 + abcd[1] * x**2 + abcd[2] * x + abcd[3]) #Prevents lower than 0 and higher than 255
 
 #Makes spline coefficient matrix for a given size
 def Make_Spline(num_points):
@@ -242,7 +289,7 @@ def Get_PSNR(orig_img,img_up):
 start_time = perf_counter() #Used to find runtime of the program
 
 orig_img = cv2.imread("valley.png") #Read in image into a numpy array
-orig_img_yuv = cv2.cvtColor(orig_img,cv2.COLOR_BGR2YUV) #Originally BGR, convert to YUV
+orig_img_yuv = BGR_YUV(orig_img) #Originally BGR, convert to YUV
 
 #Returns the length of each dimension (X pixels, Y pixels, channels)
 x_pixels, y_pixels, channels = orig_img_yuv.shape
@@ -277,10 +324,10 @@ gaussian_kernel = np.array([
     [0.0114,0.0842,0.0114]
 ])
 
-luma_img = Convolute_Channel(luma_img,gaussian_kernel)
+luma_img_blur = Convolute_Channel(luma_img,gaussian_kernel)
 
 #Down sample all the channels
-luma_img_comp = Down_Sample(luma_img,2) #compress Y by 2
+luma_img_comp = Down_Sample(luma_img_blur,2) #compress Y by 2
 blue_img_comp = Down_Sample(blue_img,4) #compress U by 4
 red_img_comp = Down_Sample(red_img,4) #compress V by 4
 
@@ -329,14 +376,14 @@ reconstructed_img[:,:,0] = luma_img_up[:x_pixels,:y_pixels] #Crop the image to t
 reconstructed_img[:,:,1] = blue_img_up[:x_pixels,:y_pixels]
 reconstructed_img[:,:,2] = red_img_up[:x_pixels,:y_pixels]
 
-reconstructed_img = cv2.cvtColor(reconstructed_img,cv2.COLOR_YUV2BGR) #convert back to BGR from YUV
+reconstructed_img = YUV_BGR(reconstructed_img) #convert back to BGR from YUV
 
 #Display and save image
 cv2.imshow("Reconstructed Image",reconstructed_img)
 cv2.imwrite("upsampled_image.png",reconstructed_img)
 
 #Calculate PSNR for the luma channel
-psnr_value = Get_PSNR(cv2.cvtColor(orig_img,cv2.COLOR_BGR2YUV)[:,:,0],cv2.cvtColor(reconstructed_img,cv2.COLOR_BGR2YUV)[:,:,0])
+psnr_value = Get_PSNR(luma_img,luma_img_up[:x_pixels,:y_pixels])
 print("PSNR: " + str(psnr_value))
 
 #Calcualtes runtime of the code
