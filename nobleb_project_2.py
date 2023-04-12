@@ -151,13 +151,13 @@ def Down_Sample(img,factor):
         new_y = y_pixels+1 if odd_y else y_pixels #If odd Y, add 1 to make it even
         #Resize the image
         img_resize = np.zeros((new_x,new_y),dtype=np.uint8)
-        img_resize[:x_pixels-1,:y_pixels-1] = img[:x_pixels-1,:y_pixels-1] #Copy over the original
+        img_resize[:x_pixels,:y_pixels] = img[:x_pixels,:y_pixels] #Copy over the original
         
         #Duplicate pixels for the extra row and/or column
         if odd_x:
-            img_resize[new_x-1:,:y_pixels-1] = img[x_pixels-1:,:y_pixels-1]
+            img_resize[-1,:y_pixels-1] = img[-2,:y_pixels-1]
         if odd_y:
-            img_resize[:x_pixels-1,new_y-1:] = img[:x_pixels-1,y_pixels-1:]
+            img_resize[:x_pixels-1,-1] = img[:x_pixels-1,-2]
 
         #Overwrite input with the resized image
         img = img_resize
@@ -256,9 +256,10 @@ luma_img_up = Clip_Image(luma_img_up)
 blue_img_up = Clip_Image(blue_img_up)
 red_img_up = Clip_Image(red_img_up)
 
-luma_img_up = luma_img_up[:x_pixels-1,:y_pixels-1]
-blue_img_up = blue_img_up[:x_pixels-1,:y_pixels-1]
-red_img_up = red_img_up[:x_pixels-1,:y_pixels-1]
+#Remove the black border
+luma_img_up = luma_img_up[:-1,:-1]
+blue_img_up = blue_img_up[:-1,:-1]
+red_img_up = red_img_up[:-1,:-1]
 
 # #Pad the images if they are not the correct size
 luma_img_up = Pad_Image([x_pixels,y_pixels],luma_img_up)
